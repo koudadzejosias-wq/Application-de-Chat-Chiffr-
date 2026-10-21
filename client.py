@@ -9,7 +9,7 @@ from websockets.asyncio.client import connect
 from crypto_utils import decrypt, derive_key, encrypt
 
 DEFAULT_URL = "wss://application-de-chat-chiffre.onrender.com"
-DEFAULT_SECRET = "tp-chat-chiffre"
+DEFAULT_SECRET = "chat-chiffre"
 
 
 async def receive(ws, key):
