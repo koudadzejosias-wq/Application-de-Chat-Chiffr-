@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from http import HTTPStatus
+from pathlib import Path
 
 from websockets.asyncio.server import serve
 
@@ -52,18 +53,27 @@ async def handler(ws):
             await broadcast({"type": "system", "text": f"{pseudo} a quitté le salon"})
 
 
-async def health(connection, request):
-    """Répond aux requêtes HTTP (page d'accueil + surveillance uptime)."""
-    if request.headers.get("Upgrade", "").lower() != "websocket":
+INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+
+
+async def http_handler(connection, request):
+    """Répond aux requêtes HTTP : client web sur /, état du serveur sur /health."""
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return None  # laisse passer la connexion WebSocket
+    if request.path.startswith("/health"):
         return connection.respond(
             HTTPStatus.OK,
             f"Serveur de chat chiffré en ligne. {len(CLIENTS)} utilisateur(s) connecté(s).\n",
         )
+    response = connection.respond(HTTPStatus.OK, INDEX_HTML)
+    del response.headers["Content-Type"]
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
 
 
 async def main():
     port = int(os.environ.get("PORT", 8765))
-    async with serve(handler, "0.0.0.0", port, process_request=health):
+    async with serve(handler, "0.0.0.0", port, process_request=http_handler):
         print(f"Serveur démarré sur le port {port}")
         await asyncio.Future()
 

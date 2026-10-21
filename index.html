@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Chiffré</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1b1d22; --muted: #6b7280;
+    --border: #dfe2e7; --accent: #2563eb; --accent-text: #ffffff;
+    --mine: #dbeafe; --other: #eef0f3; --system: #6b7280; --error: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #181b21; --text: #e6e8eb; --muted: #9aa1ac;
+      --border: #2a2f37; --accent: #3b82f6; --accent-text: #ffffff;
+      --mine: #1e3a5f; --other: #232830; --system: #9aa1ac; --error: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    height: 100dvh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  header h1 { font-size: 17px; margin: 0; }
+  #status { font-size: 13px; color: var(--muted); }
+  main { flex: 1; display: flex; flex-direction: column; min-height: 0; max-width: 760px; width: 100%; margin: 0 auto; }
+  #login { margin: auto; padding: 24px 16px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
+  #login p { color: var(--muted); margin: 0 0 4px; font-size: 14px; }
+  label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+  input {
+    font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); width: 100%;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); font-weight: 600;
+  }
+  .error { color: var(--error); font-size: 14px; min-height: 1em; }
+  #chat { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--other); align-self: flex-start; overflow-wrap: anywhere; }
+  .msg.mine { background: var(--mine); align-self: flex-end; }
+  .msg .who { font-size: 12px; font-weight: 600; color: var(--muted); display: block; }
+  .system { align-self: center; font-size: 13px; color: var(--system); font-style: italic; }
+  form#send { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel); }
+  .hint { font-size: 12px; color: var(--muted); padding: 0 16px 10px; background: var(--panel); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔒 Chat Chiffré (AES-256)</h1>
+  <span id="status">Hors ligne</span>
+</header>
+<main>
+  <form id="login">
+    <p>Choisissez un pseudo pour rejoindre le salon. Les messages sont chiffrés en AES-256-GCM dans votre navigateur avant l'envoi.</p>
+    <label>Pseudo <input id="pseudo" maxlength="20" required autocomplete="off"></label>
+    <label>Phrase secrète du salon (clé AES) <input id="secret" value="tp-chat-chiffre" required></label>
+    <button type="submit">Rejoindre le salon</button>
+    <div class="error" id="loginError"></div>
+  </form>
+  <section id="chat">
+    <div id="messages"></div>
+    <form id="send">
+      <input id="text" placeholder="Votre message…" autocomplete="off">
+      <button type="submit">Envoyer</button>
+    </form>
+    <div class="hint">Tapez <b>/quit</b> pour quitter le salon.</div>
+  </section>
+</main>
+<script>
+// Mêmes paramètres que crypto_utils.py : compatible avec le client Python
+const SALT = new TextEncoder().encode("chat-chiffre-tp-v1");
+const ITERATIONS = 200000;
+const $ = (id) => document.getElementById(id);
+let ws, key, pseudo;
+
+async function deriveKey(passphrase) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: SALT, iterations: ITERATIONS, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+function b64encode(bytes) { let s = ""; bytes.forEach((b) => s += String.fromCharCode(b)); return btoa(s); }
+function b64decode(str) { return Uint8Array.from(atob(str), (c) => c.charCodeAt(0)); }
+
+async function encrypt(text) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const payload = new TextEncoder().encode(JSON.stringify({ pseudo, text }));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, payload));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(nonce); out.set(ct, 12);
+  return b64encode(out);
+}
+
+async function decrypt(token) {
+  const raw = b64decode(token);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, key, raw.slice(12));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+function addMessage(who, text, mine) {
+  const div = document.createElement("div");
+  div.className = "msg" + (mine ? " mine" : "");
+  const name = document.createElement("span");
+  name.className = "who"; name.textContent = mine ? "Moi" : who;
+  div.append(name, document.createTextNode(text));
+  appendLine(div);
+}
+
+function addSystem(text) {
+  const div = document.createElement("div");
+  div.className = "system"; div.textContent = text;
+  appendLine(div);
+}
+
+function appendLine(el) {
+  const box = $("messages");
+  box.append(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+function showChat(on) {
+  $("login").style.display = on ? "none" : "flex";
+  $("chat").style.display = on ? "flex" : "none";
+  $("status").textContent = on ? `Connecté en tant que ${pseudo}` : "Hors ligne";
+  if (on) $("text").focus();
+}
+
+$("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("loginError").textContent = "";
+  pseudo = $("pseudo").value.trim();
+  if (!pseudo) return;
+  $("status").textContent = "Connexion…";
+  key = await deriveKey($("secret").value);
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen = () => ws.send(JSON.stringify({ type: "join", pseudo }));
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "ok") {
+      $("messages").innerHTML = "";
+      showChat(true);
+      addSystem(`Vous avez rejoint le salon. En ligne : ${msg.users.join(", ")}`);
+    } else if (msg.type === "error") {
+      $("loginError").textContent = msg.text;
+    } else if (msg.type === "system") {
+      addSystem(msg.text);
+    } else if (msg.type === "message") {
+      try {
+        const d = await decrypt(msg.data);
+        addMessage(d.pseudo, d.text, false);
+      } catch {
+        addSystem("[message illisible : mauvaise clé de chiffrement]");
+      }
+    }
+  };
+  ws.onclose = () => {
+    if ($("chat").style.display === "flex") addSystem("Déconnecté du salon.");
+    setTimeout(() => showChat(false), 1200);
+  };
+  ws.onerror = () => { $("loginError").textContent = "Connexion au serveur impossible."; };
+});
+
+$("send").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = $("text").value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  $("text").value = "";
+  if (text === "/quit") {
+    ws.send(JSON.stringify({ type: "quit" }));
+    ws.close();
+    return;
+  }
+  ws.send(JSON.stringify({ type: "message", data: await encrypt(text) }));
+  addMessage(pseudo, text, true);
+});
+</script>
+</body>
+</html>
