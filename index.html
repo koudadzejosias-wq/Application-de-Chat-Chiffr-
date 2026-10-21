@@ -8,13 +8,13 @@
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --text: #1b1d22; --muted: #6b7280;
     --border: #dfe2e7; --accent: #2563eb; --accent-text: #ffffff;
-    --mine: #dbeafe; --other: #eef0f3; --system: #6b7280; --error: #dc2626;
+    --mine: #dbeafe; --other: #eef0f3; --system: #6b7280; --error: #dc2626; --success: #15803d;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1115; --panel: #181b21; --text: #e6e8eb; --muted: #9aa1ac;
       --border: #2a2f37; --accent: #3b82f6; --accent-text: #ffffff;
-      --mine: #1e3a5f; --other: #232830; --system: #9aa1ac; --error: #f87171;
+      --mine: #1e3a5f; --other: #232830; --system: #9aa1ac; --error: #f87171; --success: #4ade80;
     }
   }
   * { box-sizing: border-box; }
@@ -42,7 +42,12 @@
     font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; cursor: pointer;
     background: var(--accent); color: var(--accent-text); font-weight: 600;
   }
-  .error { color: var(--error); font-size: 14px; min-height: 1em; }
+  .error { color: var(--error); font-size: 14px; }
+  .success { color: var(--success); font-size: 14px; }
+  .tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--other); }
+  .tab { flex: 1; background: transparent; color: var(--muted); font-weight: 500; padding: 8px; }
+  .tab.active { background: var(--panel); color: var(--text); font-weight: 600; }
+  #login.mode-login .register-only, #login.mode-register .login-only { display: none; }
   #chat { display: none; flex: 1; flex-direction: column; min-height: 0; }
   #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
   .msg { max-width: 80%; padding: 8px 12px; border-radius: 12px; background: var(--other); align-self: flex-start; overflow-wrap: anywhere; }
@@ -59,12 +64,19 @@
   <span id="status">Hors ligne</span>
 </header>
 <main>
-  <form id="login">
-    <p>Choisissez un pseudo pour rejoindre le salon. Les messages sont chiffrés en AES-256-GCM dans votre navigateur avant l'envoi.</p>
-    <label>Pseudo <input id="pseudo" maxlength="20" required autocomplete="off"></label>
-    <label>Phrase secrète du salon (clé AES) <input id="secret" value="chat-chiffre" required></label>
-    <button type="submit">Rejoindre le salon</button>
+  <form id="login" class="mode-login">
+    <div class="tabs">
+      <button type="button" class="tab active" data-mode="login">Se connecter</button>
+      <button type="button" class="tab" data-mode="register">Créer un compte</button>
+    </div>
+    <p id="intro">Connectez-vous pour rejoindre le salon. Votre nom d'utilisateur sera votre pseudo. Les messages sont chiffrés en AES-256-GCM dans votre navigateur avant l'envoi.</p>
+    <label>Nom d'utilisateur <input id="username" maxlength="20" required autocomplete="username"></label>
+    <label>Mot de passe <input id="password" type="password" required autocomplete="current-password"></label>
+    <label class="register-only">Confirmer le mot de passe <input id="password2" type="password" autocomplete="new-password"></label>
+    <label class="login-only">Phrase secrète du salon (clé AES) <input id="secret" value="chat-chiffre"></label>
+    <button type="submit" id="submitBtn">Rejoindre le salon</button>
     <div class="error" id="loginError"></div>
+    <div class="success" id="loginInfo"></div>
   </form>
   <section id="chat">
     <div id="messages"></div>
@@ -135,23 +147,71 @@ function showChat(on) {
   if (on) $("text").focus();
 }
 
+let mode = "login";
+
+function setMode(m) {
+  mode = m;
+  $("login").className = "mode-" + m;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.mode === m));
+  $("submitBtn").textContent = m === "login" ? "Rejoindre le salon" : "Créer mon compte";
+  $("intro").textContent = m === "login"
+    ? "Connectez-vous pour rejoindre le salon. Votre nom d'utilisateur sera votre pseudo. Les messages sont chiffrés en AES-256-GCM dans votre navigateur avant l'envoi."
+    : "Créez votre compte : 3 à 20 caractères (lettres, chiffres, _ ou -) et un mot de passe d'au moins 6 caractères.";
+  $("password").autocomplete = m === "login" ? "current-password" : "new-password";
+  $("loginError").textContent = "";
+}
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
+  $("loginInfo").textContent = "";
+  setMode(t.dataset.mode);
+}));
+
+// Ouvre la connexion WebSocket si besoin, puis envoie le message
+function sendAuth(payload) {
+  if (ws && ws.readyState === WebSocket.OPEN) return ws.send(JSON.stringify(payload));
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onopen = () => ws.send(JSON.stringify(payload));
+  ws.onmessage = onMessage;
+  ws.onclose = onClose;
+  ws.onerror = () => { $("loginError").textContent = "Connexion au serveur impossible."; };
+}
+
 $("login").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("loginError").textContent = "";
-  pseudo = $("pseudo").value.trim();
-  if (!pseudo) return;
-  $("status").textContent = "Connexion…";
-  key = await deriveKey($("secret").value);
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}`);
-  ws.onopen = () => ws.send(JSON.stringify({ type: "join", pseudo }));
-  ws.onmessage = async (ev) => {
+  $("loginInfo").textContent = "";
+  const username = $("username").value.trim();
+  const password = $("password").value;
+  if (!username || !password) return;
+  if (mode === "register") {
+    if (password !== $("password2").value) {
+      $("loginError").textContent = "Les deux mots de passe ne correspondent pas.";
+      return;
+    }
+    sendAuth({ type: "register", username, password });
+  } else {
+    $("status").textContent = "Connexion…";
+    key = await deriveKey($("secret").value);
+    sendAuth({ type: "login", username, password });
+  }
+});
+
+async function onMessage(ev) {
     const msg = JSON.parse(ev.data);
     if (msg.type === "ok") {
+      pseudo = msg.pseudo;
+      $("password").value = "";
       $("messages").innerHTML = "";
       showChat(true);
       addSystem(`Vous avez rejoint le salon. En ligne : ${msg.users.join(", ")}`);
+    } else if (msg.type === "registered") {
+      $("password").value = "";
+      $("password2").value = "";
+      setMode("login");
+      $("loginInfo").textContent = msg.text;
+      $("password").focus();
     } else if (msg.type === "error") {
+      $("status").textContent = "Hors ligne";
       $("loginError").textContent = msg.text;
     } else if (msg.type === "system") {
       addSystem(msg.text);
@@ -163,13 +223,15 @@ $("login").addEventListener("submit", async (e) => {
         addSystem("[message illisible : mauvaise clé de chiffrement]");
       }
     }
-  };
-  ws.onclose = () => {
-    if ($("chat").style.display === "flex") addSystem("Déconnecté du salon.");
+}
+
+function onClose() {
+  ws = null;
+  if ($("chat").style.display === "flex") {
+    addSystem("Déconnecté du salon.");
     setTimeout(() => showChat(false), 1200);
-  };
-  ws.onerror = () => { $("loginError").textContent = "Connexion au serveur impossible."; };
-});
+  }
+}
 
 $("send").addEventListener("submit", async (e) => {
   e.preventDefault();

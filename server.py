@@ -7,6 +7,8 @@ from pathlib import Path
 
 from websockets.asyncio.server import serve
 
+import accounts
+
 CLIENTS = {}  # websocket -> pseudo
 
 
@@ -20,22 +22,41 @@ async def broadcast(message: dict, exclude=None):
                 pass
 
 
+async def authenticate(ws):
+    """Gère la création de compte et la connexion. Renvoie le pseudo une fois connecté.
+
+    Messages acceptés tant que l'utilisateur n'est pas connecté :
+      {"type": "register", "username": "...", "password": "..."}
+      {"type": "login",    "username": "...", "password": "..."}
+    """
+    while True:
+        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=300))
+        username = str(msg.get("username", "")).strip()
+        password = str(msg.get("password", ""))
+        if msg.get("type") == "register":
+            error = await asyncio.to_thread(accounts.register, username, password)
+            if error:
+                await ws.send(json.dumps({"type": "error", "text": error}))
+            else:
+                await ws.send(json.dumps({"type": "registered", "text": "Compte créé ! Vous pouvez vous connecter."}))
+        elif msg.get("type") == "login":
+            pseudo = await asyncio.to_thread(accounts.login, username, password)
+            if not pseudo:
+                await ws.send(json.dumps({"type": "error", "text": "Nom d'utilisateur ou mot de passe incorrect."}))
+            elif pseudo in CLIENTS.values():
+                await ws.send(json.dumps({"type": "error", "text": "Ce compte est déjà connecté au salon."}))
+            else:
+                return pseudo
+        else:
+            await ws.send(json.dumps({"type": "error", "text": "Connectez-vous d'abord."}))
+
+
 async def handler(ws):
     pseudo = None
     try:
-        # Premier message obligatoire : {"type": "join", "pseudo": "..."}
-        hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
-        pseudo = str(hello.get("pseudo", "")).strip()[:20]
-        if hello.get("type") != "join" or not pseudo:
-            await ws.send(json.dumps({"type": "error", "text": "Pseudo invalide."}))
-            return
-        if pseudo in CLIENTS.values():
-            await ws.send(json.dumps({"type": "error", "text": "Pseudo déjà utilisé."}))
-            pseudo = None
-            return
-
+        pseudo = await authenticate(ws)
         CLIENTS[ws] = pseudo
-        await ws.send(json.dumps({"type": "ok", "users": sorted(CLIENTS.values())}))
+        await ws.send(json.dumps({"type": "ok", "pseudo": pseudo, "users": sorted(CLIENTS.values())}))
         await broadcast({"type": "system", "text": f"{pseudo} a rejoint le salon"}, exclude=ws)
 
         async for raw in ws:
