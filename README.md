@@ -19,31 +19,61 @@ Fichiers : `server.py` (serveur WebSocket + page web), `accounts.py` (comptes), 
 
 ## Installation
 
-Python 3.10+ requis.
+Prérequis : [Python 3.10+](https://www.python.org/downloads/) et [Git](https://git-scm.com/downloads).
+
+1. Récupérer le projet depuis GitHub :
+
+```bash
+git clone https://github.com/koudadzejosias-wq/Application-de-Chat-Chiffr-.git
+```
+
+2. Entrer dans le dossier du projet :
+
+```bash
+cd Application-de-Chat-Chiffr-
+```
+
+3. Installer les dépendances :
 
 ```bash
 pip install -r requirements.txt
 ```
 
+> Sans Git : sur la page GitHub du projet, bouton vert **Code** → **Download ZIP**, extraire l'archive, puis ouvrir un terminal dans le dossier extrait et reprendre à l'étape 3.
+
 ## Utilisation
 
-Serveur (local) :
+Toutes les commandes se lancent depuis le dossier du projet (`Application-de-Chat-Chiffr-`).
 
-```bash
-python server.py
-```
+### Option A : utiliser le serveur en ligne
 
-Client, vers le serveur en ligne (par défaut) :
+Client web : ouvrir https://application-de-chat-chiffre.onrender.com dans un navigateur.
+
+Client terminal :
 
 ```bash
 python client.py
 ```
 
-Client, vers un serveur local :
+### Option B : tout lancer en local
+
+1. Dans un premier terminal, démarrer le serveur (il affiche `Serveur démarré sur le port 8765`, laisser la fenêtre ouverte) :
+
+```bash
+python server.py
+```
+
+2. Dans un deuxième terminal (de nouveau dans le dossier du projet), lancer un client :
 
 ```bash
 python client.py --url ws://localhost:8765
 ```
+
+3. Ou ouvrir le client web local dans un navigateur : http://localhost:8765
+
+Pour voir deux utilisateurs discuter, lancer un deuxième client (autre terminal, ou fenêtre de navigation privée) avec un autre compte. `Ctrl+C` arrête le serveur.
+
+### Comptes et salon
 
 Au lancement, le client propose :
 
